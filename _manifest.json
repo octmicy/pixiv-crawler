@@ -1,0 +1,43 @@
+{
+  "manifest_version": 2,
+  "id": "com.claw.pixiv-crawler",
+  "version": "3.0.0",
+  "name": "麦麦!来点二次元图片!",
+  "description": "基于 Lolicon API 的二次元随机图片插件。支持多标签组合搜索、定时/手动爬取、年龄分级、AI排除、@触发。无需 Pixiv 账号。",
+  "author": {
+    "name": "octmicy",
+    "url": "https://github.com/octmicy"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/octmicy/pixiv-crawler",
+    "homepage": "https://github.com/octmicy/pixiv-crawler",
+    "documentation": "https://github.com/octmicy/pixiv-crawler",
+    "issues": "https://github.com/octmicy/pixiv-crawler/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.99.99"
+  },
+  "sdk": {
+    "min_version": "1.0.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [
+    {
+      "type": "python_package",
+      "name": "httpx",
+      "version_spec": ">=0.24.0"
+    },
+    {
+      "type": "python_package",
+      "name": "Pillow",
+      "version_spec": ">=10.0.0"
+    }
+  ],
+  "capabilities": ["send.image", "send.text"],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": ["zh-CN"]
+  }
+}
