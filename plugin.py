@@ -531,8 +531,8 @@ class PixivCrawlerPlugin(MaiBotPlugin):
 
     @Tool(
         "send_setu",
-        brief_description="发送涩图/色图/美图给用户",
-        description="当用户想要看涩图、色图、美图、来点图时，从图片仓库挑选未发送过的图片发送。",
+        brief_description="发送涩图/色图/看看腿给用户",
+        description="当用户想要看涩图、色图、美图、看看腿、来点图时，从图片仓库挑选未发送过的图片发送。",
         detailed_description="从图片仓库中挑未发送过的图片发送，不重复。",
         parameters=[],
     )
@@ -547,14 +547,14 @@ class PixivCrawlerPlugin(MaiBotPlugin):
 
     # ── @Command：发图关键词 ───────────────────────────────────────────
     #
-    # 注意：pattern 必须保持宽匹配（r"."），因为关键词列表在 config.toml 中动态配置
+    # 注意：pattern 必须宽匹配（r".+"），因为关键词列表在 config.toml 中动态配置
     # 实际关键词过滤在 handler 中完成，这样用户修改 trigger_keywords 才能生效
     #
 
     @Command(
         "setu_cmd",
         description="当用户消息中包含涩图/色图等关键词时直接触发发图",
-        pattern=r"(?:涩图|色图|setu|来[点张份]图|发[点张份]图|看看图|我要图|图图|要涩图|要色图|看看涩图|看看色图|来点涩图|来点色图|发点涩图|发点色图)",
+        pattern=r".+",
         aliases=["来点图"],
     )
     async def handle_send_setu_command(self, **kwargs) -> tuple[bool, str, int]:

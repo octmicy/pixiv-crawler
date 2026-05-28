@@ -1,0 +1,7 @@
+__pycache__/
+images/
+config_back/
+sent_images.json
+config.toml
+*.pyc
+.*.swp
