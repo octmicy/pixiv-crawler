@@ -712,24 +712,31 @@ class PixivCrawlerPlugin(MaiBotPlugin):
         self._image_urls = valid_urls
         return removed
 
-    _MAX_RAW_FOR_SEND = 12 * 1024 * 1024
-    _MAX_DIMENSION = 2048
+    _MAX_RAW_FOR_SEND = 500 * 1024  # 超过500KB就压缩（VPS到QQ服务器上传较慢，需控制图片大小）
+    _MAX_DIMENSION = 1600
+    _TARGET_MAX_SIZE = 400 * 1024  # 压缩后目标不超过400KB
 
     def _read_and_compress(self, abs_path: str) -> str:
         raw_size = os.path.getsize(abs_path)
         if raw_size <= self._MAX_RAW_FOR_SEND or not HAS_PIL:
             with open(abs_path, "rb") as f:
                 return base64.b64encode(f.read()).decode()
-        self.ctx.logger.info("[SetuPlugin] 大图压缩中: %.1fMB", raw_size / 1048576)
+        self.ctx.logger.info("[SetuPlugin] 大图压缩中: %.1fKB", raw_size / 1024)
         try:
             with Image.open(abs_path) as img:
                 img = img.convert("RGB")
                 if img.width > self._MAX_DIMENSION or img.height > self._MAX_DIMENSION:
                     img.thumbnail((self._MAX_DIMENSION, self._MAX_DIMENSION), Image.LANCZOS)
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=85, optimize=True)
-                compressed = buf.getvalue()
-                self.ctx.logger.info("[SetuPlugin] 压缩: %.1fMB → %.1fMB", raw_size / 1048576, len(compressed) / 1048576)
+
+                # 渐进式压缩：从高质量开始，逐步降低直到小于目标大小
+                for quality in (85, 75, 60, 45, 30):
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=quality, optimize=True)
+                    compressed = buf.getvalue()
+                    if len(compressed) <= self._TARGET_MAX_SIZE or quality <= 30:
+                        break
+
+                self.ctx.logger.info("[SetuPlugin] 压缩: %.1fKB → %.1fKB (q=%d)", raw_size / 1024, len(compressed) / 1024, quality)
                 return base64.b64encode(compressed).decode()
         except Exception as e:
             self.ctx.logger.warning("[SetuPlugin] 压缩失败: %s", e)
