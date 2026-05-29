@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "com.claw.pixiv-crawler",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "name": "麦麦!来点二次元图片!",
   "description": "基于 Lolicon API 的二次元随机图片插件。支持多标签组合搜索、定时/手动爬取、年龄分级、AI排除、@触发。无需 Pixiv 账号。",
   "author": {

@@ -7,7 +7,7 @@
 #  插件设置 / Plugin Settings
 # ═══════════════════════════════════════════════════════════════════════════
 [plugin]
-config_version = "3.0.0"
+config_version = "3.2.0"
 enabled = true
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -19,10 +19,13 @@ enabled = true
 # 每个字符串是一个模板，多个标签用逗号分隔（AND关系）
 # e.g. "少女,猫" 搜索同时包含「少女」和「猫」的图片
 tags = []
-tag_templates = ["少女"]
+tag_templates = [
+    "猫",
+    "少女",
+]
 per_tag_count = 20
 age_rating = "safe"
-exclude_ai = false
+exclude_ai = true
 image_size = "regular"
 
 [proxy]
@@ -53,7 +56,7 @@ crawl_trigger_keywords = ["立刻爬取"]
 enabled = true
 require_at_group = true
 require_at_private = false
-bot_name = "麦麦"
+bot_name = "星宫"
 # @ 拦截提示，留空=静默不回复
 reject_message = ""
 
@@ -62,7 +65,11 @@ reject_message = ""
 # ═══════════════════════════════════════════════════════════════════════════
 
 [send]
-trigger_keywords = ["涩图"]
+trigger_keywords = [
+    "涩图",
+    "看看腿",
+    "看看脸",
+]
 count = 3
 
 # ═══════════════════════════════════════════════════════════════════════════

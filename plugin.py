@@ -33,6 +33,7 @@ except ImportError:
     HAS_PIL = False
 
 from maibot_sdk import CONFIG_RELOAD_SCOPE_SELF, Command, MaiBotPlugin, Tool
+from maibot_sdk.types import ToolParameterInfo, ToolParamType
 from .config import CONFIG_SCHEMA_VERSION, PixivCrawlerConfig
 
 try:
@@ -373,14 +374,12 @@ class PixivCrawlerPlugin(MaiBotPlugin):
         self._save_sent_tracking()
         self.ctx.logger.info("[SetuPlugin] 清理完成: %d 张", removed)
 
-    def _list_all_images(self) -> list[tuple[float, str, str]]:
+    def _list_all_images(self, tag: str | None = None) -> list[tuple[float, str, str]]:
         result: list[tuple[float, str, str]] = []
         image_root = Path(self._image_root)
         if not image_root.exists():
             return result
-        for tag_dir in image_root.iterdir():
-            if not tag_dir.is_dir():
-                continue
+        for tag_dir in self._iter_tag_dirs(tag):
             for fpath in tag_dir.iterdir():
                 if not fpath.is_file() or fpath.suffix.lower() not in VALID_IMAGE_EXTS:
                     continue
@@ -390,25 +389,41 @@ class PixivCrawlerPlugin(MaiBotPlugin):
 
     # ── 发送 ───────────────────────────────────────────────────────────
 
-    async def _send_setu_images(self, stream_id: str, count: int | None = None) -> str:
+    async def _send_setu_images(self, stream_id: str, count: int | None = None, tag: str | None = None) -> str:
         if count is None:
             count = self.config.send.count
-        unsent = self._collect_unsent_images()
+        resolved_tag = self._normalize_existing_tag(tag) if tag else None
+        if tag and resolved_tag is None:
+            available = self._format_available_tags()
+            return f"没有找到「{tag}」分类。{available}"
+
+        unsent = self._collect_unsent_images(tag=resolved_tag)
         if not unsent:
-            # 仓库为空，尝试自动爬取
+            # 仓库为空，尝试自动爬取。指定 tag 时只补这个分类，避免一次拉全量模板。
             if self.config.schedule.auto_crawl_when_empty and not self._crawling_now:
-                self.ctx.logger.info("[SetuPlugin] 仓库为空，触发自动爬取")
+                self.ctx.logger.info("[SetuPlugin] 仓库为空，触发自动爬取%s", f" tag={resolved_tag}" if resolved_tag else "")
                 self._crawling_now = True
                 try:
-                    await self._execute_full_crawl(per_tag_count=self.config.schedule.auto_crawl_count)
+                    if resolved_tag:
+                        await self._crawl_template([resolved_tag], self.config.schedule.auto_crawl_count)
+                        await self._enforce_total_limit()
+                    else:
+                        await self._execute_full_crawl(per_tag_count=self.config.schedule.auto_crawl_count)
                 except Exception as e:
                     self.ctx.logger.error("[SetuPlugin] 自动爬取失败: %s", e)
                 finally:
                     self._crawling_now = False
-                unsent = self._collect_unsent_images()
+                unsent = self._collect_unsent_images(tag=resolved_tag)
                 if not unsent:
+                    if resolved_tag:
+                        return f"「{resolved_tag}」分类里没有可发送图片，自动爬取也没拉到图，稍后再试试吧～"
                     return "仓库里没有图片，自动爬取也没拉到图，稍后再试试吧～"
             else:
+                if resolved_tag:
+                    total = self._count_all_images(tag=resolved_tag)
+                    if total > 0:
+                        return f"「{resolved_tag}」分类里已经没有未发送图片了～"
+                    return f"「{resolved_tag}」分类里没有图片～"
                 return "仓库里已经没有图片了，等下次定时爬取后再来找我吧～"
         random.shuffle(unsent)
         selected = unsent[: min(count, len(unsent))]
@@ -424,19 +439,20 @@ class PixivCrawlerPlugin(MaiBotPlugin):
                 self.ctx.logger.error("[SetuPlugin] 发送 %s 失败: %s", rel_path, e)
         self._save_sent_tracking()
         remain = len(unsent) - sent_count
-        msg = f"发了 {sent_count} 张，仓库里还有 {remain} 张存货～"
+        if resolved_tag:
+            msg = f"发了 {sent_count} 张「{resolved_tag}」，这个分类还有 {remain} 张存货～"
+        else:
+            msg = f"发了 {sent_count} 张，仓库里还有 {remain} 张存货～"
         if remain == 0:
             msg += " 下次爬取后再来吧！"
         return msg
 
-    def _collect_unsent_images(self) -> list[tuple[str, str]]:
+    def _collect_unsent_images(self, tag: str | None = None) -> list[tuple[str, str]]:
         unsent: list[tuple[str, str]] = []
         image_root = Path(self._image_root)
         if not image_root.exists():
             return unsent
-        for tag_dir in image_root.iterdir():
-            if not tag_dir.is_dir():
-                continue
+        for tag_dir in self._iter_tag_dirs(tag):
             for fpath in tag_dir.iterdir():
                 if not fpath.is_file() or fpath.suffix.lower() not in VALID_IMAGE_EXTS:
                     continue
@@ -444,6 +460,70 @@ class PixivCrawlerPlugin(MaiBotPlugin):
                 if rel not in self._sent_files:
                     unsent.append((rel, str(fpath)))
         return unsent
+
+    def _iter_tag_dirs(self, tag: str | None = None) -> list[Path]:
+        image_root = Path(self._image_root)
+        if not image_root.exists():
+            return []
+        if tag:
+            tag_dir = image_root / self._sanitize_dirname(tag)
+            return [tag_dir] if tag_dir.is_dir() else []
+        return [p for p in image_root.iterdir() if p.is_dir()]
+
+    def _list_tags(self) -> list[str]:
+        return sorted(tag_dir.name for tag_dir in self._iter_tag_dirs())
+
+    def _normalize_existing_tag(self, tag: str | None) -> str | None:
+        if not tag:
+            return None
+        cleaned = self._sanitize_dirname(str(tag).strip().strip("「」『』[]【】()（）,，。.!！?？:：;；\"'"))
+        if not cleaned:
+            return None
+        for existing in self._list_tags():
+            if existing == cleaned:
+                return existing
+        lowered = cleaned.lower()
+        for existing in self._list_tags():
+            if existing.lower() == lowered:
+                return existing
+        return None
+
+    def _resolve_requested_tag(self, msg_text: str) -> str | None:
+        tags = self._list_tags()
+        if not tags:
+            return None
+
+        explicit_match = re.search(r"(?:tag|标签|分类)\s*[:：]?\s*([^\s,，。.!！?？;；]+)", msg_text, re.IGNORECASE)
+        if explicit_match:
+            requested = explicit_match.group(1)
+            return self._normalize_existing_tag(requested) or self._sanitize_dirname(requested)
+
+        matched = [tag for tag in tags if tag and tag in msg_text]
+        if not matched:
+            return None
+        matched.sort(key=len, reverse=True)
+        return matched[0]
+
+    def _format_available_tags(self) -> str:
+        tags = self._list_tags()
+        if not tags:
+            return "当前还没有任何图片分类。"
+        preview = "、".join(tags[:20])
+        if len(tags) > 20:
+            preview += f" 等 {len(tags)} 个"
+        return f"当前可用分类：{preview}"
+
+    def _build_tag_status_text(self) -> str:
+        tags = self._list_tags()
+        if not tags:
+            return "📁 当前还没有图片分类。先触发爬取或检查 images 目录吧～"
+        lines = ["📁 当前图片分类："]
+        for tag in tags:
+            total = self._count_all_images(tag=tag)
+            unsent = len(self._collect_unsent_images(tag=tag))
+            sent = max(0, total - unsent)
+            lines.append(f"- {tag}: {total} 张，未发送 {unsent} 张，已发送 {sent} 张")
+        return "\n".join(lines)
 
     # ── @ 检测 ─────────────────────────────────────────────────────────
 
@@ -534,7 +614,14 @@ class PixivCrawlerPlugin(MaiBotPlugin):
         brief_description="发送涩图/色图/看看腿给用户",
         description="当用户想要看涩图、色图、美图、看看腿、来点图时，从图片仓库挑选未发送过的图片发送。",
         detailed_description="从图片仓库中挑未发送过的图片发送，不重复。",
-        parameters=[],
+        parameters=[
+            ToolParameterInfo(
+                name="tag",
+                param_type=ToolParamType.STRING,
+                description="用户指定的图片分类/tag，例如 萝莉、猫耳、风景。不确定时留空。",
+                required=False,
+            ),
+        ],
     )
     async def handle_send_setu_tool(self, **kwargs) -> dict[str, Any]:
         if time.time() - self._last_cmd_time < 10:
@@ -542,7 +629,8 @@ class PixivCrawlerPlugin(MaiBotPlugin):
         error = self._check_access(kwargs)
         if error is not None:
             return {"success": False, "content": error}
-        msg = await self._send_setu_images(kwargs.get("stream_id", ""))
+        tag = kwargs.get("tag") or self._resolve_requested_tag(kwargs.get("text", "") or kwargs.get("raw_message", "") or "")
+        msg = await self._send_setu_images(kwargs.get("stream_id", ""), tag=tag)
         return {"success": True, "content": msg}
 
     # ── @Command：发图关键词 ───────────────────────────────────────────
@@ -563,6 +651,18 @@ class PixivCrawlerPlugin(MaiBotPlugin):
         # 从 kwargs 获取消息原文（Command 路径用 text，Tool 路径用 raw_message）
         msg_text = kwargs.get("text", "") or kwargs.get("raw_message", "") or ""
 
+        # 宽匹配 Command 会先接住大多数消息；分类查询要在发图关键词过滤前处理，避免被吞掉。
+        tag_status_keywords = ("图片分类", "分类列表", "tag列表", "标签列表", "有哪些tag", "有哪些标签", "查看分类", "查看标签")
+        if any(keyword in msg_text for keyword in tag_status_keywords):
+            error = self._check_access(kwargs)
+            if error is not None:
+                if error:
+                    await self.ctx.send.text(error, stream_id)
+                return False, error, 0
+            msg = self._build_tag_status_text()
+            await self.ctx.send.text(msg, stream_id)
+            return True, msg, 1
+
         # 检查 trigger_keywords 是否匹配（读取自 config.toml，支持动态修改）
         trigger_kws = self.config.send.trigger_keywords
         if trigger_kws and not any(kw in msg_text for kw in trigger_kws):
@@ -575,8 +675,40 @@ class PixivCrawlerPlugin(MaiBotPlugin):
             if error:
                 await self.ctx.send.text(error, stream_id)
             return False, error, 0
-        msg = await self._send_setu_images(stream_id)
+        requested_tag = self._resolve_requested_tag(msg_text)
+        msg = await self._send_setu_images(stream_id, tag=requested_tag)
         return True, msg, 2
+
+    # ── @Command：查看图片分类 ─────────────────────────────────────────
+
+    @Command(
+        "tag_list_cmd",
+        description="查看当前图片分类/tag 列表和各分类库存",
+        pattern=r"(?:图片分类|分类列表|tag列表|标签列表|有哪些tag|有哪些标签|查看分类|查看标签)",
+        aliases=["图片分类", "分类列表", "tag列表", "标签列表", "查看分类"],
+    )
+    async def handle_tag_list_command(self, **kwargs) -> tuple[bool, str, int]:
+        stream_id = kwargs.get("stream_id", "")
+        error = self._check_access(kwargs)
+        if error is not None:
+            if error:
+                await self.ctx.send.text(error, stream_id)
+            return False, error, 0
+        msg = self._build_tag_status_text()
+        await self.ctx.send.text(msg, stream_id)
+        return True, msg, 1
+
+    @Tool(
+        "pixiv_tag_status",
+        brief_description="查看图片分类/tag 列表",
+        description="查看图片仓库中有哪些分类/tag，以及每个分类的总数、未发送数量和已发送数量。",
+        parameters=[],
+    )
+    async def handle_tag_status_tool(self, **kwargs) -> dict[str, Any]:
+        error = self._check_access(kwargs)
+        if error is not None:
+            return {"success": False, "content": error}
+        return {"success": True, "content": self._build_tag_status_text()}
 
     # ── @Command：立刻爬取 ─────────────────────────────────────────────
     #
@@ -656,7 +788,7 @@ class PixivCrawlerPlugin(MaiBotPlugin):
             f"  已发送:   {sent_count}",
             f"  未发送:   {max(0, total_files - sent_count)}",
             f"  URL缓存:  {url_count} 条",
-            f"  发送模式: URL优先，失败回退base64",
+            f"  发送模式: base64压缩发送",
         ]
         if tag_stats:
             lines.append("  ── 各标签分布 ──")
@@ -743,11 +875,11 @@ class PixivCrawlerPlugin(MaiBotPlugin):
             with open(abs_path, "rb") as f:
                 return base64.b64encode(f.read()).decode()
 
-    def _count_all_images(self) -> int:
-        return len(self._list_all_images())
+    def _count_all_images(self, tag: str | None = None) -> int:
+        return len(self._list_all_images(tag=tag))
 
-    def _count_unsent_images(self) -> int:
-        return len(self._collect_unsent_images())
+    def _count_unsent_images(self, tag: str | None = None) -> int:
+        return len(self._collect_unsent_images(tag=tag))
 
     @staticmethod
     def _sanitize_dirname(name: str) -> str:
